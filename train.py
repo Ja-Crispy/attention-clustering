@@ -57,8 +57,8 @@ def setup_optimizer(model: Transformer, config: TrainConfig):
             ]
         )
         optimizer_name = "Muon+AdamW"
-    except ImportError:
-        print("WARNING: muon-optimizer not installed, falling back to AdamW")
+    except ImportError as e:
+        print(f"WARNING: muon import failed ({e}), falling back to AdamW")
         optimizer = torch.optim.AdamW(
             [
                 dict(

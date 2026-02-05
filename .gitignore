@@ -6,11 +6,16 @@ dist/
 build/
 .eggs/
 
-# Results and checkpoints (large files)
-results/
+# Checkpoints (large binary files)
 *.pt
 *.pth
 *.ckpt
+
+# Keep results JSON/logs, ignore heavy checkpoint files
+results/**/step_*.pt
+results/**/best.pt
+results/**/final.pt
+results/**/drope_final.pt
 
 # IDE
 .vscode/
