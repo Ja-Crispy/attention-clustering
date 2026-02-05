@@ -37,9 +37,9 @@ def setup_optimizer(model: Transformer, config: TrainConfig):
     param_groups = model.get_param_groups()
 
     try:
-        from muon import MuonWithAuxAdam
+        from muon import SingleDeviceMuonWithAuxAdam
 
-        optimizer = MuonWithAuxAdam(
+        optimizer = SingleDeviceMuonWithAuxAdam(
             [
                 dict(
                     params=param_groups["muon_params"],

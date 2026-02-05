@@ -31,8 +31,10 @@ class RoPE(nn.Module):
         t = torch.arange(max_seq_len)
         freqs = torch.outer(t, freqs)
         # Store cos and sin directly instead of complex numbers for broader dtype support
-        self.register_buffer("cos_cached", freqs.cos())
-        self.register_buffer("sin_cached", freqs.sin())
+        # persistent=False: these are deterministically computed from config,
+        # no need to save in state_dict (also avoids DroPE load issues)
+        self.register_buffer("cos_cached", freqs.cos(), persistent=False)
+        self.register_buffer("sin_cached", freqs.sin(), persistent=False)
 
     def forward(self, x: torch.Tensor, offset: int = 0) -> torch.Tensor:
         """Apply rotary embeddings to input tensor.
