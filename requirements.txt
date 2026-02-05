@@ -6,5 +6,5 @@ matplotlib
 seaborn
 tqdm
 wandb
-tensorlens
 transformer-lens
+# tensorlens: install separately via `git clone https://github.com/idoatad/TensorLens.git && cd TensorLens && uv sync`
