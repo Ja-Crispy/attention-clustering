@@ -42,6 +42,9 @@ class MicroLanguageGenerator:
 
         self.transitions = self._build_transition_matrices()
         self.unigrams = self._build_unigram_distributions()
+        # Precompute CDFs for fast sampling (avoids repeated rng.choice overhead)
+        self.transition_cdfs = np.cumsum(self.transitions, axis=-1)
+        self.unigram_cdfs = np.cumsum(self.unigrams, axis=-1)
 
     def _build_transition_matrices(self) -> np.ndarray:
         """Build per-topic bigram transition matrices.
@@ -150,16 +153,17 @@ class MicroLanguageGenerator:
             topic = topics[seg_idx]
             seg_len = int(seg_lengths[seg_idx])
 
-            # First token of segment: sample from unigram
+            # First token of segment: sample from unigram via CDF
             if pos == 0:
-                prev = rng.choice(self.vocab_size, p=self.unigrams[topic])
+                prev = int(np.searchsorted(self.unigram_cdfs[topic], rng.random()))
             else:
                 prev = tokens[pos - 1]
 
-            for i in range(seg_len):
-                if pos + i >= seq_len:
-                    break
-                next_token = rng.choice(self.vocab_size, p=self.transitions[topic][prev])
+            # Vectorized: draw all uniform random numbers at once, sample via CDF
+            end = min(pos + seg_len, seq_len)
+            uniforms = rng.random(end - pos)
+            for i in range(end - pos):
+                next_token = int(np.searchsorted(self.transition_cdfs[topic, prev], uniforms[i]))
                 tokens[pos + i] = next_token
                 labels[pos + i] = topic
                 prev = next_token
@@ -186,7 +190,8 @@ class MicroLanguageGenerator:
         all_tokens = np.zeros((num_sequences, seq_len), dtype=np.int64)
         all_labels = np.zeros((num_sequences, seq_len), dtype=np.int64)
 
-        for i in range(num_sequences):
+        from tqdm import trange
+        for i in trange(num_sequences, desc="Generating sequences", leave=False):
             seq_rng = np.random.default_rng(rng.integers(0, 2**31))
             all_tokens[i], all_labels[i] = self.generate_sequence(seq_len, seq_rng)
 
