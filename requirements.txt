@@ -7,4 +7,5 @@ seaborn
 tqdm
 wandb
 transformer-lens
+uv
 # tensorlens: install separately via `git clone https://github.com/idoatad/TensorLens.git && cd TensorLens && uv sync`
