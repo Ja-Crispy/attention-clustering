@@ -1,0 +1,10 @@
+torch>=2.1.0
+numpy>=1.24.0
+muon-optimizer
+scikit-learn
+matplotlib
+seaborn
+tqdm
+wandb
+tensorlens
+transformer-lens
