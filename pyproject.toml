@@ -1,0 +1,20 @@
+[project]
+name = "attention-clustering"
+version = "0.1.0"
+description = "Does training data ordering install durable computational structure in attention heads?"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1.0",
+    "numpy>=1.24.0",
+    "muon-optimizer",
+    "scikit-learn",
+    "matplotlib",
+    "seaborn",
+    "tqdm",
+    "wandb",
+    "transformer-lens",
+    "uv",
+]
+
+[project.optional-dependencies]
+tensorlens = []  # install manually: git clone https://github.com/idoatad/TensorLens.git && cd TensorLens && uv sync
