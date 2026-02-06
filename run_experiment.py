@@ -387,22 +387,135 @@ def print_summary(results: list[dict]):
     print(f"     Probe@L4 = linear probe accuracy for topic at layer 4")
 
 
+def run_v2(debug: bool = False) -> list[dict]:
+    """Run v2 experiment with Wikipedia data (~98M param model).
+
+    Data must be prepared first: python -m data.wikipedia
+    Or this will auto-prepare if cache doesn't exist.
+    """
+    from data.wikipedia import load_wiki_data, WikiPipelineConfig, WikipediaPipeline
+
+    wiki_cfg = WikiPipelineConfig()
+
+    # Load or prepare data
+    try:
+        train_tokens, train_labels, val_tokens, val_labels = load_wiki_data(wiki_cfg.cache_dir)
+        print(f"Loaded wiki data: train={train_tokens.shape}, val={val_tokens.shape}")
+    except FileNotFoundError:
+        print("Wiki data not found. Running preparation pipeline...")
+        pipeline = WikipediaPipeline(wiki_cfg)
+        train_tokens, train_labels, val_tokens, val_labels = pipeline.run()
+
+    # Model config: ~98M params
+    if debug:
+        base_model = ModelConfig(
+            hidden_size=256, num_layers=4, num_q_heads=4, num_kv_heads=4,
+            head_dim=64, intermediate_size=688,
+            vocab_size=wiki_cfg.vocab_size, max_seq_len=wiki_cfg.seq_len,
+        )
+        base_train = TrainConfig(
+            num_steps=200, batch_size=16, warmup_steps=20,
+            log_every=20, eval_every=100, save_every=100,
+        )
+    else:
+        base_model = ModelConfig(
+            hidden_size=768, num_layers=12, num_q_heads=12, num_kv_heads=12,
+            head_dim=64, intermediate_size=2048,
+            vocab_size=wiki_cfg.vocab_size, max_seq_len=wiki_cfg.seq_len,
+        )
+        base_train = TrainConfig(
+            num_steps=30_000, batch_size=64, warmup_steps=1000,
+            log_every=100, eval_every=1000, save_every=5000,
+        )
+
+    base_data = DataConfig(
+        num_topics=wiki_cfg.num_topics,
+        vocab_size=wiki_cfg.vocab_size,
+        seq_len=wiki_cfg.seq_len,
+        num_train_sequences=wiki_cfg.num_train_sequences,
+        num_val_sequences=wiki_cfg.num_val_sequences,
+    )
+
+    random_baseline = math.log(wiki_cfg.vocab_size)
+
+    print(f"\n{'='*60}")
+    print("V2 EXPERIMENT: Wikipedia Data")
+    print(f"{'='*60}")
+    print(f"  Model: {base_model.num_layers}L/{base_model.hidden_size}d/"
+          f"{base_model.num_q_heads}h (~{base_model.num_params_approx:,} params)")
+    print(f"  Data: {wiki_cfg.num_topics} topics, {wiki_cfg.vocab_size} vocab")
+    print(f"  Training: {base_train.num_steps} steps, batch {base_train.batch_size}")
+    print(f"  Random baseline: ln({wiki_cfg.vocab_size}) = {random_baseline:.2f} nats")
+
+    # 4 conditions: MHA/GQA x shuffled/topic_ordered (each gets DroPE too)
+    conditions = []
+    for attn_name, num_kv in [("mha", base_model.num_q_heads), ("gqa", base_model.num_q_heads // 2)]:
+        for ordering in ["shuffled", "topic_ordered"]:
+            name = f"v2_{attn_name}_{ordering}_rope"
+            cfg = ExperimentConfig(
+                name=name,
+                model=ModelConfig(
+                    **{**vars(base_model), "num_kv_heads": num_kv, "use_rope": True}
+                ),
+                data=DataConfig(**{**vars(base_data), "ordering": ordering}),
+                train=base_train,
+                output_dir="results_v2",
+            )
+            conditions.append(cfg)
+
+    print(f"\n  Running {len(conditions)} conditions (+ DroPE for each):")
+    for c in conditions:
+        print(f"    - {c.name}")
+    print()
+
+    all_results = []
+    t0 = time.time()
+
+    for cfg in conditions:
+        loaders = create_dataloaders_from_cache(
+            train_tokens, train_labels, val_tokens, val_labels,
+            ordering=cfg.data.ordering,
+            batch_size=cfg.train.batch_size,
+            seed=cfg.data.seed,
+        )
+        result = run_single_experiment(cfg, dataloaders=loaders)
+        all_results.append(result)
+
+    total_time = time.time() - t0
+    print(f"\n{'='*60}")
+    print(f"V2 EXPERIMENTS COMPLETE in {total_time:.1f}s")
+    print(f"{'='*60}")
+
+    output_path = Path("results_v2") / "all_results.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
+        json.dump(all_results, f, indent=2, default=str)
+
+    print_summary(all_results)
+    return all_results
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run attention clustering experiments")
     parser.add_argument("--full", action="store_true", help="Run full experimental matrix")
     parser.add_argument("--debug", action="store_true", help="Quick debug run (small models)")
     parser.add_argument("--sanity", action="store_true", help="Sanity check with easy synthetic data")
+    parser.add_argument("--v2", action="store_true", help="Run v2 experiment with Wikipedia data")
     parser.add_argument("--name", type=str, help="Run single named condition")
     parser.add_argument("--output-dir", default="results", help="Output directory")
     args = parser.parse_args()
 
     if args.sanity:
         run_sanity_check()
+    elif args.v2:
+        run_v2(debug=args.debug)
     elif args.full or args.debug:
         run_full_matrix(debug=args.debug)
     elif args.name:
         cfg = ExperimentConfig(name=args.name, output_dir=args.output_dir)
         run_single_experiment(cfg)
     else:
-        print("Usage: python run_experiment.py --debug (for quick test)")
-        print("       python run_experiment.py --full (for full matrix)")
+        print("Usage: python run_experiment.py --sanity  (sanity check)")
+        print("       python run_experiment.py --v2      (v2 Wikipedia experiment)")
+        print("       python run_experiment.py --debug   (quick test)")
+        print("       python run_experiment.py --full    (full v1 matrix)")

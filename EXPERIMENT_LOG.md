@@ -116,36 +116,82 @@ is encouraging — topic-ordered training does install *something* durable.
 
 ---
 
-## Sanity Check (pre-Run 2)
+## Sanity Check Results (2026-02-06)
 
 ### Purpose
 Validate methodology detects ordering effects when signal is strong (easy data).
-If this fails, the pipeline has bugs. If it passes, proceed to real data.
 
 ### Config
 - Data: 3 topics, 512 vocab, concentration=100.0, 20K train / 2K val, seq_len=256
-- Model: 4 layers, 256 hidden, 4 heads, ~3.8M params
+- Model: 4 layers, 256 hidden, 4 heads, ~3.3M params
 - Training: 5K steps, MHA only (2 conditions + DroPE)
 - Random baseline: ln(512) = 6.24 nats
-- Expected learnable gap: ~1.7 nats (much better than Run 1's 1.04)
-- Command: `python run_experiment.py --sanity`
+- Runtime: ~13 minutes on L4 GPU
+
+### Results
+| Condition | Val Loss | Gap | Within% | Probe@L4 |
+|-----------|----------|-----|---------|----------|
+| sanity_mha_shuffled_rope | 4.805 | 1.43 (23%) | 69.6% | 99.2% |
+| sanity_mha_shuffled_drope | 5.812 | 0.43 (7%) | 67.5% | 92.2% |
+| sanity_mha_topic_ordered_rope | 4.746 | 1.49 (24%) | 72.4% | 99.2% |
+| sanity_mha_topic_ordered_drope | 5.841 | 0.40 (6%) | 67.6% | 95.3% |
+
+### DroPE Probe Differential (topic_ordered - shuffled)
+| Layer | Accuracy Diff |
+|-------|--------------|
+| layer_2 | +3.1% |
+| layer_3 | +3.5% |
+| layer_4 | +3.1% |
+
+### Verdict: PASS
+- RoPE conditions learned well (23-24% below random baseline)
+- DroPE loss regression is expected (only 100 recal steps)
+- **Probe signal reproduces**: +3.1-3.5% at layers 2-4, same pattern as Run 1
+- Within-cluster ratio: topic_ordered slightly higher with RoPE (72.4% vs 69.6%),
+  converges after DroPE (both ~67.5%)
+- Methodology validated. Proceeding to v2 with real data.
 
 ---
 
-## v2 Plan: Real Data Experiment
+## v2: Real Data Experiment (Wikipedia)
 
-### Changes from Run 1
-- **Data**: Wikipedia articles + sentence-transformer embedding clustering (8 topics)
-  - Download ~500K articles, embed with `all-MiniLM-L6-v2`, K-means into 8 clusters
-  - Train BPE tokenizer (16K vocab) on the corpus
-  - Rich semantic structure, real language, learnable gap >>2 nats
-- **Model**: Mini-Qwen3 v2 (~98-100M params)
-  - 768 hidden, 12 layers, 12 heads, head_dim=64, SwiGLU (intermediate ~2048)
-  - Same QK-Norm architecture, just scaled up
-- **Training**: 30K steps on A100 80GB (Prime Intellect, $0.51/hr spot)
-- **Budget**: ~$3-5 total
-- **Why not SYNTH by Pleias**: Q&A exercise format, not plain text. Not ideal for
-  causal LM pretraining comparison.
+### Pipeline (implemented in data/wikipedia.py)
+1. Download 100K Wikipedia articles (streaming, ~10 min)
+2. Extract paragraphs (50-500 words), filter headers/tables
+3. Embed with `all-MiniLM-L6-v2` (384-dim, ~5 min on GPU)
+4. K-means cluster into 8 topics (MiniBatchKMeans)
+5. Train BPE tokenizer (16K vocab, HuggingFace tokenizers)
+6. Build 500K train + 10K val multi-topic sequences
+   - Each sequence: 2-4 segments from different topic clusters
+   - Segments filled from concatenated paragraph pools
+   - Matches synthetic data structure for direct comparison
+
+### Model: Mini-Qwen3 v2 (~98M params)
+- 768 hidden, 12 layers, 12 heads, head_dim=64
+- SwiGLU MLP (intermediate=2048), RMSNorm, QK-Norm, RoPE
+- Vocab 16384, seq_len 512, tied embeddings
+
+### Training
+- 30K steps, batch 64, Muon (0.02) + AdamW (3e-4)
+- 1000 step warmup, cosine decay
+- A100 80GB (Prime Intellect spot, $0.51/hr)
+- Budget estimate: ~$3-5 total
+
+### Commands
+```bash
+# Step 1: Prepare data (run on any machine with internet + GPU)
+pip install datasets sentence-transformers tokenizers scikit-learn
+python -m data.wikipedia
+
+# Step 2: Run experiment
+python run_experiment.py --v2
+
+# Debug (small model, 200 steps)
+python run_experiment.py --v2 --debug
+```
+
+### Why not SYNTH by Pleias
+Q&A exercise format, not plain text. Not ideal for causal LM pretraining comparison.
 
 ---
 

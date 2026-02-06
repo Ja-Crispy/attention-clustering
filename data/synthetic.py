@@ -251,8 +251,8 @@ class MicroLanguageDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         return {
-            "input_ids": torch.from_numpy(self.tokens[idx].copy()),
-            "labels": torch.from_numpy(self.labels[idx].copy()),
+            "input_ids": torch.from_numpy(self.tokens[idx].copy()).long(),
+            "labels": torch.from_numpy(self.labels[idx].copy()).long(),
         }
 
 
