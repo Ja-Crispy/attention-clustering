@@ -19,6 +19,7 @@ Usage:
 
 import argparse
 import json
+import math
 import time
 from pathlib import Path
 
@@ -131,6 +132,143 @@ def run_single_experiment(
         json.dump(result, f, indent=2, default=str)
 
     return result
+
+
+def run_sanity_check() -> list[dict]:
+    """Run a quick sanity check with easy synthetic data.
+
+    Uses high topic concentration (100x) so topics are trivially distinguishable.
+    If methodology is sound, we should see:
+    - Val loss well below random (ln(512) = 6.24)
+    - Clear probe accuracy differences between topic_ordered and shuffled after DroPE
+    - Higher within-cluster attention ratios for topic_ordered
+
+    Config: vocab=512, 3 topics, concentration=100, 256 seq_len
+    Model: 4 layers, 256 hidden, 4 heads (~3.8M params)
+    Training: 5K steps, batch_size=64
+    """
+    base_model = ModelConfig(
+        hidden_size=256,
+        num_layers=4,
+        num_q_heads=4,
+        num_kv_heads=4,
+        head_dim=64,
+        intermediate_size=688,
+        vocab_size=512,
+        max_seq_len=256,
+    )
+    base_data = DataConfig(
+        num_topics=3,
+        vocab_size=512,
+        seq_len=256,
+        num_train_sequences=20_000,
+        num_val_sequences=2_000,
+        min_segments=2,
+        max_segments=4,
+        min_segment_len=32,
+        topic_concentration=100.0,
+    )
+    base_train = TrainConfig(
+        num_steps=5_000,
+        batch_size=64,
+        warmup_steps=250,
+        log_every=50,
+        eval_every=250,
+        save_every=1000,
+    )
+
+    # Generate shared data
+    print("=" * 60)
+    print("SANITY CHECK: Easy synthetic data (high topic concentration)")
+    print("=" * 60)
+    print(f"  Vocab: {base_data.vocab_size}, Topics: {base_data.num_topics}, "
+          f"Concentration: {base_data.topic_concentration}")
+    print(f"  Model: {base_model.num_layers}L/{base_model.hidden_size}d/"
+          f"{base_model.num_q_heads}h (~{base_model.num_params_approx:,} params)")
+    print(f"  Training: {base_train.num_steps} steps, batch {base_train.batch_size}")
+    print(f"  Random baseline: ln({base_data.vocab_size}) = {math.log(base_data.vocab_size):.2f} nats")
+    print()
+
+    train_tokens, train_labels, val_tokens, val_labels, generator = generate_raw_data(base_data)
+    print(f"  Train: {train_tokens.shape}, Val: {val_tokens.shape}")
+
+    # MHA only: shuffled vs topic_ordered (2 conditions + DroPE = 4 total)
+    conditions = []
+    for ordering in ["shuffled", "topic_ordered"]:
+        name = f"sanity_mha_{ordering}_rope"
+        cfg = ExperimentConfig(
+            name=name,
+            model=ModelConfig(**{**vars(base_model), "use_rope": True}),
+            data=DataConfig(**{**vars(base_data), "ordering": ordering}),
+            train=base_train,
+            output_dir="results_sanity",
+        )
+        conditions.append(cfg)
+
+    print(f"\nRunning {len(conditions)} conditions (+ DroPE for each):")
+    for c in conditions:
+        print(f"  - {c.name}")
+    print()
+
+    all_results = []
+    t0 = time.time()
+
+    for cfg in conditions:
+        loaders = create_dataloaders_from_cache(
+            train_tokens, train_labels, val_tokens, val_labels,
+            ordering=cfg.data.ordering,
+            batch_size=cfg.train.batch_size,
+            seed=cfg.data.seed,
+        )
+        result = run_single_experiment(cfg, dataloaders=loaders)
+        all_results.append(result)
+
+    total_time = time.time() - t0
+    print(f"\n{'=' * 60}")
+    print(f"SANITY CHECK COMPLETE in {total_time:.1f}s")
+    print(f"{'=' * 60}")
+
+    # Save combined
+    output_path = Path("results_sanity") / "sanity_results.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
+        json.dump(all_results, f, indent=2, default=str)
+
+    print_summary(all_results)
+
+    # Print pass/fail verdict
+    random_loss = math.log(base_data.vocab_size)
+    print(f"\n{'=' * 60}")
+    print("SANITY CHECK VERDICT")
+    print(f"{'=' * 60}")
+    for r in all_results:
+        gap = random_loss - r["train"]["final_val_loss"]
+        pct = gap / random_loss * 100
+        status = "PASS" if pct > 20 else "FAIL"
+        print(f"  {r['name']}: val_loss={r['train']['final_val_loss']:.3f} "
+              f"(gap={gap:.2f} nats, {pct:.0f}% of random) [{status}]")
+        if "drope" in r:
+            drope_name = r["name"].replace("rope", "drope")
+            drope_loss = r["drope"]["train"]["val_loss"]
+            drope_gap = random_loss - drope_loss
+            drope_pct = drope_gap / random_loss * 100
+            drope_status = "PASS" if drope_pct > 10 else "FAIL"
+            print(f"  {drope_name}: val_loss={drope_loss:.3f} "
+                  f"(gap={drope_gap:.2f} nats, {drope_pct:.0f}% of random) [{drope_status}]")
+
+    # Check probe differential
+    if len(all_results) == 2:
+        shuffled_drope_probes = all_results[0].get("drope", {}).get("probes", [])
+        ordered_drope_probes = all_results[1].get("drope", {}).get("probes", [])
+        if shuffled_drope_probes and ordered_drope_probes:
+            print(f"\n  DroPE Probe Accuracy (topic_ordered - shuffled):")
+            for i, (s, o) in enumerate(zip(shuffled_drope_probes, ordered_drope_probes)):
+                diff = o["val_acc"] - s["val_acc"]
+                layer_name = s.get("layer", f"layer_{i}")
+                marker = " <<<" if abs(diff) > 0.05 else ""
+                print(f"    {layer_name}: {diff:+.1%}{marker}")
+
+    return all_results
 
 
 def run_full_matrix(debug: bool = False) -> list[dict]:
@@ -253,11 +391,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run attention clustering experiments")
     parser.add_argument("--full", action="store_true", help="Run full experimental matrix")
     parser.add_argument("--debug", action="store_true", help="Quick debug run (small models)")
+    parser.add_argument("--sanity", action="store_true", help="Sanity check with easy synthetic data")
     parser.add_argument("--name", type=str, help="Run single named condition")
     parser.add_argument("--output-dir", default="results", help="Output directory")
     args = parser.parse_args()
 
-    if args.full or args.debug:
+    if args.sanity:
+        run_sanity_check()
+    elif args.full or args.debug:
         run_full_matrix(debug=args.debug)
     elif args.name:
         cfg = ExperimentConfig(name=args.name, output_dir=args.output_dir)
