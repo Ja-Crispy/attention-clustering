@@ -1,0 +1,49 @@
+{
+  "name": "mha_topic_ordered_rope",
+  "model": {
+    "hidden_size": 512,
+    "num_layers": 8,
+    "num_q_heads": 8,
+    "num_kv_heads": 8,
+    "head_dim": 64,
+    "intermediate_size": 1376,
+    "vocab_size": 4096,
+    "max_seq_len": 512,
+    "rope_theta": 1000000.0,
+    "qk_norm": true,
+    "tie_embeddings": true,
+    "rms_norm_eps": 1e-06,
+    "use_rope": true,
+    "dropout": 0.0
+  },
+  "data": {
+    "num_topics": 5,
+    "vocab_size": 4096,
+    "seq_len": 512,
+    "num_train_sequences": 100000,
+    "num_val_sequences": 10000,
+    "min_segments": 2,
+    "max_segments": 5,
+    "min_segment_len": 64,
+    "topic_concentration": 5.0,
+    "ordering": "topic_ordered",
+    "seed": 42
+  },
+  "train": {
+    "batch_size": 64,
+    "num_steps": 10000,
+    "muon_lr": 0.02,
+    "adam_lr": 0.0003,
+    "weight_decay": 0.01,
+    "warmup_steps": 500,
+    "grad_clip": 1.0,
+    "seed": 42,
+    "save_every": 1000,
+    "log_every": 50,
+    "eval_every": 500,
+    "device": "cuda",
+    "dtype": "bfloat16",
+    "use_wandb": false,
+    "compile": false
+  }
+}
