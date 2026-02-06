@@ -33,22 +33,36 @@ from config import (
 )
 from train import train, drope_recalibrate
 from model.transformer import Transformer
-from data.synthetic import create_dataloaders
+from data.synthetic import (
+    create_dataloaders,
+    generate_raw_data,
+    create_dataloaders_from_cache,
+    MicroLanguageGenerator,
+)
 from analysis.attention import analyze_model
 from analysis.probes import run_probing_experiment
 
 
-def run_single_experiment(config: ExperimentConfig, skip_drope: bool = False) -> dict:
+def run_single_experiment(
+    config: ExperimentConfig,
+    skip_drope: bool = False,
+    dataloaders: tuple | None = None,
+) -> dict:
     """Run a single experiment: train + analyze.
 
     For RoPE conditions, also runs DroPE recalibration and analysis.
+
+    Args:
+        config: Experiment configuration
+        skip_drope: Skip DroPE recalibration
+        dataloaders: Optional (train_loader, val_loader) to skip data generation
     """
     print(f"\n{'='*60}")
     print(f"EXPERIMENT: {config.name}")
     print(f"{'='*60}")
 
     # Phase 1: Train
-    train_result = train(config)
+    train_result = train(config, dataloaders=dataloaders)
 
     # Phase 2: Analyze
     device = torch.device(config.train.device if torch.cuda.is_available() else "cpu")
@@ -57,7 +71,11 @@ def run_single_experiment(config: ExperimentConfig, skip_drope: bool = False) ->
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model"])
 
-    _, val_loader, _ = create_dataloaders(config.data, batch_size=config.train.batch_size)
+    # Reuse val_loader from dataloaders if available
+    if dataloaders is not None:
+        _, val_loader = dataloaders
+    else:
+        _, val_loader, _ = create_dataloaders(config.data, batch_size=config.train.batch_size)
 
     print(f"\nRunning mech interp analysis for {config.name}...")
     analysis = analyze_model(model, val_loader, device, num_topics=config.data.num_topics)
@@ -80,7 +98,7 @@ def run_single_experiment(config: ExperimentConfig, skip_drope: bool = False) ->
     # Phase 3: DroPE recalibration (only for RoPE-trained models)
     if config.model.use_rope and not skip_drope:
         print(f"\nRunning DroPE recalibration for {config.name}...")
-        drope_result = drope_recalibrate(config, str(ckpt_path))
+        drope_result = drope_recalibrate(config, str(ckpt_path), dataloaders=dataloaders)
 
         # Analyze DroPE'd model
         drope_name = config.name.replace("rope", "drope")
@@ -129,6 +147,11 @@ def run_full_matrix(debug: bool = False) -> list[dict]:
         base_data = DataConfig()
         base_train = TrainConfig()
 
+    # Generate raw data ONCE — shared across all conditions
+    print("Generating shared dataset (one-time)...")
+    train_tokens, train_labels, val_tokens, val_labels, generator = generate_raw_data(base_data)
+    print(f"  Train: {train_tokens.shape}, Val: {val_tokens.shape}")
+
     # Only run RoPE conditions (DroPE is derived from them)
     conditions = []
     for attn_name, num_kv in [("mha", base_model.num_q_heads), ("gqa", base_model.num_q_heads // 2)]:
@@ -153,7 +176,14 @@ def run_full_matrix(debug: bool = False) -> list[dict]:
     t0 = time.time()
 
     for cfg in conditions:
-        result = run_single_experiment(cfg)
+        # Build dataloaders from cached data with per-condition ordering
+        loaders = create_dataloaders_from_cache(
+            train_tokens, train_labels, val_tokens, val_labels,
+            ordering=cfg.data.ordering,
+            batch_size=cfg.train.batch_size,
+            seed=cfg.data.seed,
+        )
+        result = run_single_experiment(cfg, dataloaders=loaders)
         all_results.append(result)
 
     total_time = time.time() - t0

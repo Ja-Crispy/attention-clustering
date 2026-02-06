@@ -111,12 +111,14 @@ def evaluate(model: Transformer, val_loader: DataLoader, device: torch.device, m
 def train(
     config: ExperimentConfig,
     resume_from: Optional[str] = None,
+    dataloaders: Optional[tuple[DataLoader, DataLoader]] = None,
 ) -> dict:
     """Main training function.
 
     Args:
         config: Full experiment configuration
         resume_from: Path to checkpoint to resume from
+        dataloaders: Optional (train_loader, val_loader) to skip data generation
 
     Returns:
         dict with training metrics and paths
@@ -135,9 +137,12 @@ def train(
         torch.cuda.manual_seed(config.train.seed)
 
     # Data
-    train_loader, val_loader, generator = create_dataloaders(
-        config.data, batch_size=config.train.batch_size
-    )
+    if dataloaders is not None:
+        train_loader, val_loader = dataloaders
+    else:
+        train_loader, val_loader, _ = create_dataloaders(
+            config.data, batch_size=config.train.batch_size
+        )
 
     # Model
     model = Transformer(config.model).to(device)
@@ -286,6 +291,7 @@ def drope_recalibrate(
     config: ExperimentConfig,
     checkpoint_path: str,
     recal_steps: int = 100,
+    dataloaders: Optional[tuple[DataLoader, DataLoader]] = None,
 ) -> dict:
     """DroPE recalibration: load a RoPE-trained model, drop RoPE, fine-tune briefly.
 
@@ -293,6 +299,7 @@ def drope_recalibrate(
         config: Experiment config (should have use_rope=True originally)
         checkpoint_path: Path to the RoPE-trained checkpoint
         recal_steps: Number of recalibration steps (~1% of training)
+        dataloaders: Optional (train_loader, val_loader) to skip data generation
 
     Returns:
         dict with recalibration metrics
@@ -321,9 +328,12 @@ def drope_recalibrate(
     recal_train.adam_lr = config.train.adam_lr * 0.1
 
     # Data (same as original, to avoid distribution shift during recal)
-    train_loader, val_loader, _ = create_dataloaders(
-        config.data, batch_size=config.train.batch_size
-    )
+    if dataloaders is not None:
+        train_loader, val_loader = dataloaders
+    else:
+        train_loader, val_loader, _ = create_dataloaders(
+            config.data, batch_size=config.train.batch_size
+        )
 
     optimizer, _ = setup_optimizer(model, recal_train)
     for group in optimizer.param_groups:

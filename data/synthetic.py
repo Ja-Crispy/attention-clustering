@@ -191,7 +191,7 @@ class MicroLanguageGenerator:
         all_labels = np.zeros((num_sequences, seq_len), dtype=np.int64)
 
         from tqdm import trange
-        for i in trange(num_sequences, desc="Generating sequences", leave=False):
+        for i in trange(num_sequences, desc="Generating sequences"):
             seq_rng = np.random.default_rng(rng.integers(0, 2**31))
             all_tokens[i], all_labels[i] = self.generate_sequence(seq_len, seq_rng)
 
@@ -256,15 +256,13 @@ class MicroLanguageDataset(Dataset):
         }
 
 
-def create_dataloaders(
+def generate_raw_data(
     config: DataConfig,
-    batch_size: int = 64,
-    num_workers: int = 0,
-) -> tuple[DataLoader, DataLoader, MicroLanguageGenerator]:
-    """Create train and validation dataloaders.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, MicroLanguageGenerator]:
+    """Generate raw train/val arrays (no ordering applied yet).
 
     Returns:
-        train_loader, val_loader, generator
+        train_tokens, train_labels, val_tokens, val_labels, generator
     """
     generator = MicroLanguageGenerator(config)
 
@@ -277,18 +275,35 @@ def create_dataloaders(
         config.num_val_sequences, seed=config.seed + 1
     )
 
+    return train_tokens, train_labels, val_tokens, val_labels, generator
+
+
+def create_dataloaders_from_cache(
+    train_tokens: np.ndarray,
+    train_labels: np.ndarray,
+    val_tokens: np.ndarray,
+    val_labels: np.ndarray,
+    ordering: str = "shuffled",
+    batch_size: int = 64,
+    num_workers: int = 0,
+    seed: int = 42,
+) -> tuple[DataLoader, DataLoader]:
+    """Create dataloaders from pre-generated arrays (avoids re-generating data).
+
+    Returns:
+        train_loader, val_loader
+    """
     train_dataset = MicroLanguageDataset(
-        train_tokens, train_labels, ordering=config.ordering, seed=config.seed
+        train_tokens.copy(), train_labels.copy(), ordering=ordering, seed=seed
     )
-    # Validation always shuffled
     val_dataset = MicroLanguageDataset(
-        val_tokens, val_labels, ordering="shuffled", seed=config.seed + 1
+        val_tokens.copy(), val_labels.copy(), ordering="shuffled", seed=seed + 1
     )
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=(config.ordering == "shuffled"),  # shuffle within epoch if shuffled mode
+        shuffle=(ordering == "shuffled"),
         num_workers=num_workers,
         pin_memory=True,
         drop_last=True,
@@ -299,6 +314,27 @@ def create_dataloaders(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
+    )
+
+    return train_loader, val_loader
+
+
+def create_dataloaders(
+    config: DataConfig,
+    batch_size: int = 64,
+    num_workers: int = 0,
+) -> tuple[DataLoader, DataLoader, MicroLanguageGenerator]:
+    """Create train and validation dataloaders (generates data fresh).
+
+    Returns:
+        train_loader, val_loader, generator
+    """
+    train_tokens, train_labels, val_tokens, val_labels, generator = generate_raw_data(config)
+
+    train_loader, val_loader = create_dataloaders_from_cache(
+        train_tokens, train_labels, val_tokens, val_labels,
+        ordering=config.ordering, batch_size=batch_size,
+        num_workers=num_workers, seed=config.seed,
     )
 
     return train_loader, val_loader, generator

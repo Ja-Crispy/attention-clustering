@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
+from sklearn.preprocessing import StandardScaler
 
 from model.transformer import Transformer
 from .attention import extract_hidden_states
@@ -64,7 +65,7 @@ def train_linear_probe(
     hidden_states: np.ndarray,
     labels: np.ndarray,
     train_fraction: float = 0.8,
-    max_iter: int = 500,
+    max_iter: int = 2000,
     seed: int = 42,
 ) -> dict:
     """Train a logistic regression probe on hidden states to predict topic.
@@ -86,6 +87,11 @@ def train_linear_probe(
     y_train = labels[perm[:split]]
     X_val = hidden_states[perm[split:]]
     y_val = labels[perm[split:]]
+
+    # Scale features — lbfgs converges much faster on standardized inputs
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_val = scaler.transform(X_val)
 
     clf = LogisticRegression(
         max_iter=max_iter,
