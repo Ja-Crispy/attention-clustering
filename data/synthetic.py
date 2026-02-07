@@ -234,8 +234,9 @@ class MicroLanguageDataset(Dataset):
 
         if ordering == "topic_ordered":
             # Sort by dominant topic, then by secondary patterns within topic
+            num_classes = int(labels.max()) + 1
             dominant = np.array(
-                [np.bincount(row, minlength=labels.max() + 1).argmax() for row in labels]
+                [np.bincount(row, minlength=num_classes).argmax() for row in labels]
             )
             sort_idx = np.argsort(dominant, kind="stable")
             self.tokens = self.tokens[sort_idx]
