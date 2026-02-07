@@ -79,10 +79,10 @@ def run_single_experiment(
         _, val_loader, _ = create_dataloaders(config.data, batch_size=config.train.batch_size)
 
     print(f"\nRunning mech interp analysis for {config.name}...")
-    analysis = analyze_model(model, val_loader, device, num_topics=config.data.num_topics)
+    analysis = analyze_model(model, val_loader, device, num_topics=config.data.num_topics, num_batches=5)
 
     print(f"\nRunning linear probes for {config.name}...")
-    probes = run_probing_experiment(model, val_loader, device)
+    probes = run_probing_experiment(model, val_loader, device, num_batches=10)
 
     result = {
         "name": config.name,
@@ -111,9 +111,9 @@ def run_single_experiment(
 
         print(f"\nRunning mech interp analysis for {drope_name}...")
         drope_analysis = analyze_model(
-            drope_model, val_loader, device, num_topics=config.data.num_topics
+            drope_model, val_loader, device, num_topics=config.data.num_topics, num_batches=5
         )
-        drope_probes = run_probing_experiment(drope_model, val_loader, device)
+        drope_probes = run_probing_experiment(drope_model, val_loader, device, num_batches=10)
 
         result["drope"] = {
             "train": drope_result,
@@ -472,6 +472,16 @@ def run_v2(debug: bool = False) -> list[dict]:
     t0 = time.time()
 
     for cfg in conditions:
+        # Resume: skip conditions that already have full results
+        result_file = Path(cfg.output_dir) / cfg.name / "experiment_result.json"
+        if result_file.exists():
+            print(f"\n{'='*60}")
+            print(f"SKIPPING {cfg.name} (results already exist)")
+            print(f"{'='*60}")
+            with open(result_file) as f:
+                all_results.append(json.load(f))
+            continue
+
         loaders = create_dataloaders_from_cache(
             train_tokens, train_labels, val_tokens, val_labels,
             ordering=cfg.data.ordering,
